@@ -1,2 +1,3 @@
 # tlanema
-Real time LSM alphabet detector for the 21 static letters of the alphabet.
+
+Name comes from the merge of three Náhuatl words: *tlatolli* (spoken word), *nepantla* (in the middle of), and *machiotl* (signs).
