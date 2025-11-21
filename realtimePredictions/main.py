@@ -176,7 +176,7 @@ def map_prediction_to_label(pred_array: np.array) -> str:
   index = np.argmax(pred_array, axis=1)[0]
   return INVERSE_CLASSES_MAP[index]
 
-model_path = '/home/firelink/Downloads/lsm/fine_tuned_model/lsm-detector-hands-mobilenetv2-61e.keras'
+model_path = './lsm-detector-hands-mobilenetv2-61e.keras'
 if not os.path.exists(model_path):
   print(f'Model was not found in path {model_path}.')
 else:
