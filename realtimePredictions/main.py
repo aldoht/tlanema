@@ -3,8 +3,6 @@ import numpy as np
 import mediapipe as mp
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
-from mediapipe import solutions
-from mediapipe.framework.formats import landmark_pb2
 import os
 import tensorflow as tf
 import time
@@ -16,6 +14,10 @@ MARGIN = 10  # pixels
 FONT_SIZE = 1
 FONT_THICKNESS = 1
 HANDEDNESS_TEXT_COLOR = (255, 0, 0) # red
+
+mp_hands = mp.tasks.vision.HandLandmarksConnections
+mp_drawing = mp.tasks.vision.drawing_utils
+mp_drawing_styles = mp.tasks.vision.drawing_styles
 
 CLASSES_MAP = {
     'A': 0,
@@ -67,21 +69,21 @@ landmarks_map = {
 }
 
 model_dict = {
-    0: ('./lsm-detector-hands-mobilenetv2-61e.keras', False, 3),
-    1: ('./lsm-detector-hands-scratch-84e.keras', True, 1)
+    0: ('./realtimePredictions/lsm-detector-hands-mobilenetv2-61e.keras', False, 3),
+    1: ('./realtimePredictions/lsm-detector-hands-scratch-84e.keras', True, 1)
 }
 
 # HandLandmarker object
 options = vision.HandLandmarkerOptions(
     base_options=python.BaseOptions(
-        model_asset_path='./hand_landmarker.task'
+        model_asset_path='./realtimePredictions/hand_landmarker.task'
     ),
     running_mode=vision.RunningMode.IMAGE,
     num_hands=1
 )
 detector = vision.HandLandmarker.create_from_options(options)
 
-def open_cam() -> (cv2.VideoCapture, int, int):
+def open_cam() -> tuple[cv2.VideoCapture, int, int]:
     cam = cv2.VideoCapture(0)
     frame_width = int(cam.get(cv2.CAP_PROP_FRAME_WIDTH))
     frame_height = int(cam.get(cv2.CAP_PROP_FRAME_HEIGHT))
@@ -115,86 +117,98 @@ def detect_img(image: mp.Image):
 
 def draw_landmarks_on_image(rgb_image, detection_result):
     hand_landmarks_list = detection_result.hand_landmarks
+    handedness_list = detection_result.handedness
     annotated_image = np.copy(rgb_image)
+    text_x, text_y = 0, 0
 
-    hand_landmarks = hand_landmarks_list[0]
+    # Loop through the detected hands to visualize.
+    for idx in range(len(hand_landmarks_list)):
+        hand_landmarks = hand_landmarks_list[idx]
+        handedness = handedness_list[idx]
 
-    # Draw the hand landmarks.
-    hand_landmarks_proto = landmark_pb2.NormalizedLandmarkList()
-    hand_landmarks_proto.landmark.extend([
-        landmark_pb2.NormalizedLandmark(x=landmark.x, y=landmark.y, z=landmark.z) for landmark in hand_landmarks
-    ])
-    solutions.drawing_utils.draw_landmarks(
+        # Draw the hand landmarks.
+        mp_drawing.draw_landmarks(
         annotated_image,
-        hand_landmarks_proto,
-        solutions.hands.HAND_CONNECTIONS,
-        solutions.drawing_styles.get_default_hand_landmarks_style(),
-        solutions.drawing_styles.get_default_hand_connections_style()
-    )
+        hand_landmarks,
+        mp_hands.HAND_CONNECTIONS,
+        mp_drawing_styles.get_default_hand_landmarks_style(),
+        mp_drawing_styles.get_default_hand_connections_style())
 
-    # Get the top left corner of the detected hand's bounding box.
-    height, width, _ = annotated_image.shape
-    x_coordinates = [landmark.x for landmark in hand_landmarks]
-    y_coordinates = [landmark.y for landmark in hand_landmarks]
-    text_x = int(min(x_coordinates) * width)
-    text_y = int(min(y_coordinates) * height) - MARGIN
+        # Get the top left corner of the detected hand's bounding box.
+        height, width, _ = annotated_image.shape
+        x_coordinates = [landmark.x for landmark in hand_landmarks]
+        y_coordinates = [landmark.y for landmark in hand_landmarks]
+        text_x = int(min(x_coordinates) * width)
+        text_y = int(min(y_coordinates) * height) - MARGIN
+
+        # Draw handedness (left or right hand) on the image.
+        cv2.putText(annotated_image, f"{handedness[0].category_name}",
+                    (text_x, text_y), cv2.FONT_HERSHEY_DUPLEX,
+                    FONT_SIZE, HANDEDNESS_TEXT_COLOR, FONT_THICKNESS, cv2.LINE_AA)
 
     return annotated_image, text_x, text_y
 
-def get_hand_from_image(rgb_image, detection_result):
+def get_hand_from_image(rgb_image: np.ndarray, detection_result, hand_index: int = 0, crop_margin: int = 70) -> np.ndarray | None:
+    """
+    Crops a hand region from an image based on MediaPipe hand detection results.
+
+    Args:
+        rgb_image: The input RGB image as a NumPy array.
+        detection_result: The result from MediaPipe HandLandmarker.
+        hand_index: Index of the hand to crop (0 = first detected hand).
+        crop_margin: Pixel margin to add around the hand bounding box.
+
+    Returns:
+        Cropped NumPy array of the hand region, or None if no hand is found.
+    """
     hand_landmarks_list = detection_result.hand_landmarks
-    cropped_image = np.copy(rgb_image)
 
-    hand_landmarks = hand_landmarks_list[0]
+    if not hand_landmarks_list or hand_index >= len(hand_landmarks_list):
+        return None
 
-    # Get the hand landmarks from detection
-    hand_landmarks_proto = landmark_pb2.NormalizedLandmarkList()
-    hand_landmarks_proto.landmark.extend([
-        landmark_pb2.NormalizedLandmark(x=landmark.x, y=landmark.y, z=landmark.z) for landmark in hand_landmarks
-    ])
+    hand_landmarks = hand_landmarks_list[hand_index]
+    height, width = rgb_image.shape[:2]
 
-    # Separate the hand landmarks (x,y,z) -> x, (x,y,z) -> y
-    height, width, channels = cropped_image.shape
     x_coordinates = [landmark.x for landmark in hand_landmarks]
     y_coordinates = [landmark.y for landmark in hand_landmarks]
 
-    # Crop the image
-    crop_margin = 70
+    start_x = max(0, int(min(x_coordinates) * width) - crop_margin)
+    start_y = max(0, int(min(y_coordinates) * height) - crop_margin)
+    end_x   = min(width,  int(max(x_coordinates) * width)  + crop_margin)
+    end_y   = min(height, int(max(y_coordinates) * height) + crop_margin)
 
-    start_x = int(min(x_coordinates) * width) - crop_margin if (int(min(x_coordinates) * width) - crop_margin) > 0 else 0
-    start_y = (int(min(y_coordinates) * height) - crop_margin) if (int(min(y_coordinates) * height) - crop_margin) > 0 else 0
-
-    end_x = int(max(x_coordinates) * width) + crop_margin if (int(max(x_coordinates) * width) + crop_margin) < width else width
-    end_y = int(max(y_coordinates) * height) + crop_margin if (int(max(y_coordinates) * height) + crop_margin) < height else height
-
-    return cropped_image[start_y:end_y, start_x:end_x]
+    return np.copy(rgb_image[start_y:end_y, start_x:end_x])
 
 def process_hand_image(image, greyscale=True, height=60, width=60):
     _, image, detection = detect_img(image)
 
     # Empty detection
-    if detection == -1:
+    if detection == -1 or image == -1:
         print('No hand was detected.')
-        return None
+        return None, None
 
     handImage = get_hand_from_image(image.numpy_view(), detection)
+    if handImage is None:
+        raise
 
+    size = (int(width), int(height))
     if greyscale:
-        handImage = cv2.cvtColor(cv2.resize(handImage,(height,width)), cv2.COLOR_RGB2GRAY)
+        handImage = cv2.cvtColor(cv2.resize(handImage, size), cv2.COLOR_RGB2GRAY)
         handImage = np.expand_dims(handImage, axis=-1)
     else:
-        handImage = cv2.resize(handImage,(height,width))
+        handImage = cv2.resize(handImage, size)
         handImage = cv2.cvtColor(handImage, cv2.COLOR_BGR2RGB)
 
-    print(f'Image was processed.')
+    print('Image was processed.')
 
     return image, handImage
 
-def map_prediction_to_label(pred_array: np.array) -> str:
+def map_prediction_to_label(pred_array: np.ndarray) -> str:
     index = np.argmax(pred_array, axis=1)[0]
     return INVERSE_CLASSES_MAP[index]
 
 def select_model() -> tuple[str, bool, int]:
+    user_idx = -1
     while True:
         print('Seleccione el modelo a utilizar: ')
         for model_idx, model_path in model_dict.items():
@@ -202,7 +216,7 @@ def select_model() -> tuple[str, bool, int]:
         print('Modelo:', end=' ')
         try:
             user_idx = int(input())
-            if not (user_idx in model_dict.keys()):
+            if user_idx not in model_dict.keys():
                 raise OutsideOptionRange
             return model_dict[user_idx]
         except ValueError:
@@ -211,49 +225,55 @@ def select_model() -> tuple[str, bool, int]:
             print(f'El numero {user_idx} no esta en las opciones.', end=' ')
         print('Intente de nuevo por favor.')
 
-model_path, greyscale_value, channel_size = select_model()
-if not os.path.exists(model_path):
-    print(f'Model was not found in path {model_path}.')
-else:
-    try:
-        loaded_cnn = tf.keras.models.load_model(model_path, compile=True)
-        print(f'Model was loaded correctly.')
-    except Exception as e:
-        print(f'Error when loading the model in {model_path}: {e}.')
-        quit()
-
-cam, w, h = open_cam()
-
-secondsBetweenPredictions = 0.5
-last_prediction_time = 0
-last_prediction_text = ""
-
-while True:
-    ret, frame = cam.read()
-    imgRGB = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=imgRGB)
-    original_detection_result, image, _ = detect_img(mp_image)
-
-    current_time = time.time()
-
-    # No hand detected
-    if original_detection_result == -1:
-        cv2.imshow('Camera', cv2.cvtColor(mp_image.numpy_view(), cv2.COLOR_RGB2BGR))
+if __name__ == '__main__':
+    model_path, greyscale_value, channel_size = select_model()
+    loaded_cnn = None
+    
+    if not os.path.exists(model_path):
+        print(f'Model was not found in path {model_path}.')
+        exit(1)
     else:
-        annotated_image, x, y = draw_landmarks_on_image(mp_image.numpy_view(), original_detection_result)
-
-        if current_time - last_prediction_time >= secondsBetweenPredictions:
-            test_original, test_hand = process_hand_image(image, greyscale=greyscale_value, height=224, width=224)
-            test_hand_reshaped = test_hand.reshape(1, 224, 224, channel_size)
-            prediction = loaded_cnn.predict(test_hand_reshaped)
-            last_prediction_text = f"{map_prediction_to_label(prediction)}: {np.max(prediction)*100:.1f}%"
-            last_prediction_time = current_time
-
-        cv2.putText(annotated_image, last_prediction_text,
-                    (x, y), cv2.FONT_HERSHEY_DUPLEX,
-                    FONT_SIZE, HANDEDNESS_TEXT_COLOR, FONT_THICKNESS, cv2.LINE_AA)
-        cv2.imshow('Camera', cv2.cvtColor(annotated_image, cv2.COLOR_RGB2BGR))
-
-    if cv2.waitKey(1) & 0xFF == ord('q'):
-        print("User quit.")
-        break
+        try:
+            loaded_cnn = tf.keras.models.load_model(model_path, compile=True)
+            print('Model was loaded correctly.')
+        except Exception as e:
+            print(f'Error when loading the model in {model_path}: {e}.')
+            exit(1)
+    
+    cam, w, h = open_cam()
+    
+    secondsBetweenPredictions = 0.5
+    last_prediction_time = 0
+    last_prediction_text = ""
+    
+    while True:
+        ret, frame = cam.read()
+        imgRGB = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=imgRGB)
+        original_detection_result, image, _ = detect_img(mp_image)
+    
+        current_time = time.time()
+    
+        # No hand detected
+        if original_detection_result == -1:
+            cv2.imshow('Camera', cv2.cvtColor(mp_image.numpy_view(), cv2.COLOR_RGB2BGR))
+        else:
+            annotated_image, x, y = draw_landmarks_on_image(mp_image.numpy_view(), original_detection_result)
+    
+            if current_time - last_prediction_time >= secondsBetweenPredictions:
+                test_original, test_hand = process_hand_image(image, greyscale=greyscale_value, height=224, width=224)
+                if test_original is None or test_hand is None:
+                    continue
+                test_hand_reshaped = test_hand.reshape(1, 224, 224, channel_size)
+                prediction = loaded_cnn.predict(test_hand_reshaped)
+                last_prediction_text = f"{map_prediction_to_label(prediction)}: {np.max(prediction)*100:.1f}%"
+                last_prediction_time = current_time
+    
+            cv2.putText(annotated_image, last_prediction_text,
+                        (x, y + FONT_SIZE*30), cv2.FONT_HERSHEY_DUPLEX,
+                        FONT_SIZE, HANDEDNESS_TEXT_COLOR, FONT_THICKNESS, cv2.LINE_AA)
+            cv2.imshow('Camera', cv2.cvtColor(annotated_image, cv2.COLOR_RGB2BGR))
+    
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            print("User quit.")
+            break
