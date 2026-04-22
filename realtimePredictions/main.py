@@ -84,18 +84,44 @@ options = vision.HandLandmarkerOptions(
 detector = vision.HandLandmarker.create_from_options(options)
 
 def open_cam() -> tuple[cv2.VideoCapture, int, int]:
+    """
+    Opens the user's camera.
+    
+    Args:
+        None.
+    
+    Returns:
+        A tuple containing a VideoCapture object along with the camera dimensions (width, height).
+    """
     cam = cv2.VideoCapture(0)
     frame_width = int(cam.get(cv2.CAP_PROP_FRAME_WIDTH))
     frame_height = int(cam.get(cv2.CAP_PROP_FRAME_HEIGHT))
     return cam, frame_width, frame_height
 
 def close_cam(camera: cv2.VideoCapture) -> None:
+    """
+    Closes the user's camera.
+    
+    Args:
+        camera: A VideoCapture object that was created by the open_cam function.
+    
+    Returns:
+        None.
+    """
     camera.release()
     cv2.destroyAllWindows()
     return
 
-# Returns handmarks information in image at img_path
 def detect_img(image: mp.Image):
+    """
+    Makes the detection of a hand in an image.
+    
+    Args:
+        image: The image where the detection will take place.
+    
+    Returns:
+        A tuple containing two detections and the original image, or a tuple[-1, -1, -1] if there was an error while detecting the image.
+    """
     original_detection = detector.detect(image)
     flipped_detection = original_detection
 
@@ -116,6 +142,16 @@ def detect_img(image: mp.Image):
     return original_detection, image, flipped_detection
 
 def draw_landmarks_on_image(rgb_image, detection_result):
+    """
+    Draws the hand landmarks on an image.
+    
+    Args:
+        rgb_image: The image where the landmarks will be drawn.
+        detection_result: The detection performed on rgb_image.
+    
+    Returns:
+        A tuple containing the annotated image and the (x,y) coordinates where text was written.
+    """
     hand_landmarks_list = detection_result.hand_landmarks
     handedness_list = detection_result.handedness
     annotated_image = np.copy(rgb_image)
@@ -180,6 +216,21 @@ def get_hand_from_image(rgb_image: np.ndarray, detection_result, hand_index: int
     return np.copy(rgb_image[start_y:end_y, start_x:end_x])
 
 def process_hand_image(image, greyscale=True, height=60, width=60):
+    """
+    Processes a hand image so it can be fed to the model. Defaults for the greyscale model.
+    
+    Args:
+        image: The original image to perform inference.
+        greyscale: Wheter the image will be turn into greyscale or not.
+        height: Final height of the image.
+        width: Final width of the image.
+    
+    Returns:
+        The original image and its processed hand image.
+    
+    Raises:
+        An error is raised if there is no detected hand in the image.
+    """
     _, image, detection = detect_img(image)
 
     # Empty detection
@@ -204,10 +255,28 @@ def process_hand_image(image, greyscale=True, height=60, width=60):
     return image, handImage
 
 def map_prediction_to_label(pred_array: np.ndarray) -> str:
+    """
+    Maps the model's prediction to a label.
+    
+    Args:
+        pred_array: The np.ndarray that contains the probabilities predicted for each class by the model.
+    
+    Returns:
+        The label of the predicted class.
+    """
     index = np.argmax(pred_array, axis=1)[0]
     return INVERSE_CLASSES_MAP[index]
 
 def select_model() -> tuple[str, bool, int]:
+    """
+    Makes the user select a model.
+    
+    Args:
+        None.
+    
+    Returns:
+        A tuple containing the path, channel, and channel size of the selected model.
+    """
     user_idx = -1
     while True:
         print('Seleccione el modelo a utilizar: ')
